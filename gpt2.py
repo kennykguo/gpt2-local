@@ -86,6 +86,7 @@ class GPT(nn.Module):
         super().__init__()
         self.config = config
 
+        # All are randomly initialized
         # nn.ModuleDict allows you to index into model layers like a dictionary
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
@@ -95,6 +96,33 @@ class GPT(nn.Module):
             ln_f = nn.LayerNorm(config.n_embd),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
+
+    def forward(self, idx, targets=None):
+        # idx is of shape (B, T)
+        B, T = idx.size()
+        assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
+        # Forward the token and posisition embeddings (exactly like a dictionary)
+        # Need to be careful to initialize on the correct device
+        pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
+
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (T, n_embd)
+
+        tok_emb = self.transformer.wte(idx) # token embeddings of shape (B, T, n_embd)
+
+        x = tok_emb + pos_emb
+
+        # Forward the blocks of the transformer using list comprehension
+        for block in self.transformer.h:
+            x = block(x)
+        
+        # Forward the final layernorm and the classifier
+        x = self.transformer.ln_f(x)
+
+        loss = None
+        logits = self.lm_head(x) # (B, T, vocab_size)
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1)) # ( B * T, vocab_size) and (B * T)
+        return logits, loss
 
     @classmethod
     def from_pretrained(cls, model_type):
@@ -145,42 +173,49 @@ class GPT(nn.Module):
 
         return model
     
-    def forward(self, idx, targets=None):
-        # idx is of shape (B, T)
-        B, T = idx.size()
-        assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
-        # forward the token and posisition embeddings
-        pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (T, n_embd)
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (B, T, n_embd)
-        x = tok_emb + pos_emb
-        # forward the blocks of the transformer
-        for block in self.transformer.h:
-            x = block(x)
-        # forward the final layernorm and the classifier
-        x = self.transformer.ln_f(x)
-        logits = self.lm_head(x) # (B, T, vocab_size)
-        # loss = None
-        # if targets is not None:
-            # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
-        return logits
+### --------------------------------------------------------------------------------------------------------------------------------
 
+device = "cpu"
+# if torch.cuda.is_available():
+#     device = "cuda"
+# elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+#     device = "mps"
+print(f"using device: {device}")
+
+
+import tiktoken
+with open("input.txt", 'r') as f:
+    text = f.read()
+text = text[:1000]
+enc = tiktoken.get_encoding('gpt2')
+tokens = enc.encode(text)
+B, T = 4, 32
+buf = torch.tensor(tokens[:B*T + 1])
+x = buf[:-1].view(B,T)
+y = buf[1:].view(B,T)
+
+
+model = GPT(GPTConfig())
+model = model.to(device)
+logits, loss = model(x, y)
+print(loss)
 
 
 num_return_sequences = 5
 max_length = 30
 
-model = GPT.from_pretrained('gpt2')
-model.eval()
+import sys
+sys.exit(0)
 
 # Prefix tokens
 import tiktoken
 enc = tiktoken.get_encoding('gpt2')
-tokens = enc.encode("hello, i'm a language model")
+tokens = enc.encode("I am going to rob your house")
 tokens = torch.tensor(tokens, dtype = torch.long)
 tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
 x = tokens.to('cpu')
 
+# Generating tokens (can put into Jupyter notebook aswell)
 while x.size(1) < max_length: # (B, T) -> (5, 8)
     with torch.no_grad():
         # (B, T, vocab_size)
