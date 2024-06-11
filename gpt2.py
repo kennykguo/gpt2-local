@@ -231,28 +231,41 @@ import tiktoken
 import code
 import time
 
+# Initialize device
 device = "cpu"
-# if torch.cuda.is_available():
-#     device = "cuda"
-# elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-#     device = "mps"
+if torch.cuda.is_available():
+    device = "cuda"
+elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    device = "mps"
 print(f"using device: {device}")
 
-
+# Initalize our data
 train_loader = DataLoaderLite(B=2, T = 1024)
 
+# Tells torch what kernel precision to run -> "highest", "high", etc
+torch.set_float32_matmul_precision('high') 
+
+# Create model
 model = GPT(GPTConfig())
+model = model.to(device)
+model = torch.compile(model)
 
 # First and second moment, momentum and RMSProp
 optimizer = torch.optim.AdamW(model.parameters(), lr = 3e-4)
 
 for i in range(50):
+
     t0 = time.time()
+
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
+
     # Start with zero gradient, loss.backward() does a +=, so you must set them to zero
     optimizer.zero_grad()
+
+    # with torch.autocast(device_type = device, dtype = torch.bfloat16):
     logits, loss = model(x,y)
+    
     # code.interact(local = locals())
     loss.backward()
     optimizer.step()
